@@ -1,0 +1,1 @@
+- [canvus_api project structure and terminology](project_canvus_api.md) — Module responsibilities, naming conventions (PDF="Pdf", location/size as dicts), parenting offset formula, and paths of the three created docs files

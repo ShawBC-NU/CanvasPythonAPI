@@ -155,7 +155,9 @@ await client.delete_canvas(canvas_id)
 
 ## Creating Widgets
 
-Widgets are the objects on a canvas: notes, images, videos, PDFs, browsers, anchors, and connectors. Each widget type has dedicated methods.
+Widgets are the objects on a canvas: notes, images, videos, PDFs, browsers, anchors, connectors, and more. Each widget type has dedicated methods.
+
+> **Canvus 3.5** introduced three new widget types: **Tables** (grid-based containers), **IP Videos** (live network streams), and **RDP Connections** (remote desktop sessions). See the [API Reference](api-reference.md#whats-new-in-canvus-35) for details.
 
 ### Coordinates and Sizes
 

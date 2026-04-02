@@ -2,6 +2,42 @@
 
 Complete method signatures for all operations exposed by `CanvusClient`. Methods are grouped by resource category. Every method is `async` and must be awaited inside an `async with CanvusClient(...) as client:` block.
 
+---
+
+## What's New in Canvus 3.5
+
+This section summarizes API changes introduced in Canvus 3.5. Items marked with *(New in Canvus 3.5)* throughout this document indicate features from this release.
+
+### New Widget Types
+
+| Widget Type | Description | Endpoint |
+|-------------|-------------|----------|
+| **Table** | Grid-based container with cells for tabular layouts | `/canvases/{id}/tables` |
+| **TableCell** | Individual cell within a Table widget | `/canvases/{id}/tables/{tableId}/cells` |
+| **IpVideo** | Live network video streams (RTSP, RTMP) | `/canvases/{id}/ip-videos` |
+| **RdpConnection** | Remote Desktop Protocol sessions | `/canvases/{id}/rdp-connections` |
+
+### New Attributes
+
+| Widget | Attribute | Type | Description |
+|--------|-----------|------|-------------|
+| Video | `muted` | `bool` | Whether audio is muted (default `false`) |
+| Video | `duration` | `float` | Duration in seconds (read-only, populated by client decoder) |
+
+### New Parameters
+
+| Parameter | Applies To | Description |
+|-----------|------------|-------------|
+| `auto_raise` | All PATCH endpoints | When `true`, sets widget depth above all siblings |
+
+### Breaking Changes
+
+1. **Depth validation enforced** — PATCH requests setting `depth` below 1.0 now return `400 Bad Request`
+2. **Image/Video resize enforces aspect ratio** — Size changes use longest-edge scaling; read the response for actual applied size
+3. **Video pause preserves position** — Pausing without explicit `playback_position` now computes correct current position
+
+---
+
 ## Table of Contents
 
 - [Client Initialization](#client-initialization)
@@ -16,6 +52,9 @@ Complete method signatures for all operations exposed by `CanvusClient`. Methods
 - [PDFs](#pdfs)
 - [Anchors](#anchors)
 - [Connectors](#connectors)
+- [Tables](#tables) *(New in Canvus 3.5)*
+- [IP Videos](#ip-videos) *(New in Canvus 3.5)*
+- [RDP Connections](#rdp-connections) *(New in Canvus 3.5)*
 - [Canvas Background](#canvas-background)
 - [Color Presets](#color-presets)
 - [Canvas Permissions](#canvas-permissions)
@@ -301,6 +340,12 @@ Creates a new widget of any type. Use type-specific methods for images, videos, 
 
 Applies a partial update to any widget. When `parent_id` is changed, the client automatically validates the hierarchy and adjusts `location` to preserve the widget's visual position.
 
+**Common update parameters** *(auto_raise is New in Canvus 3.5)*:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `auto_raise` | `bool` | When `true`, sets depth to `maxSiblingDepth + 1.0`, matching UI bring-to-front behavior |
+
 ```python
 # Move a widget
 widget = await client.update_widget(canvas_id, widget_id, {
@@ -311,7 +356,14 @@ widget = await client.update_widget(canvas_id, widget_id, {
 widget = await client.update_widget(canvas_id, widget_id, {
     "parent_id": parent_widget_id,
 })
+
+# Bring widget to front (New in Canvus 3.5)
+widget = await client.update_widget(canvas_id, widget_id, {
+    "auto_raise": True,
+})
 ```
+
+> **Canvus 3.5 breaking change:** `depth` values below 1.0 now return `400 Bad Request`. Previously, values like -1 or 0 made widgets render behind the canvas background, permanently inaccessible from the UI.
 
 ### `delete_widget(canvas_id: str, widget_id: str) -> None`
 
@@ -320,6 +372,12 @@ Deletes a widget from the canvas.
 ### `list_widget_annotations(canvas_id: str) -> List[Dict[str, Any]]`
 
 Returns annotation data for all widgets in a canvas.
+
+### `clone_widgets(canvas_id: str, payload: Dict[str, Any]) -> List[Widget]` *(New in Canvus 3.5 - Stub)*
+
+> **Note:** This endpoint is registered but returns `501 Not Implemented`. Full server-side cloning is planned for a future release.
+
+Reserved for cross-canvas widget cloning.
 
 ---
 
@@ -398,6 +456,8 @@ image = await client.create_image(
 
 Applies a partial update. When `parent_id` changes, location is adjusted automatically.
 
+> **Canvus 3.5 breaking change:** Changing `size` on Image widgets now enforces the current aspect ratio. The requested size is treated as a bounding box using longest-edge scaling. Read the response body to get the actual applied size.
+
 ### `delete_image(canvas_id: str, image_id: str) -> None`
 
 ### `download_image(canvas_id: str, image_id: str) -> bytes`
@@ -466,16 +526,30 @@ video = await client.create_video(
 
 ### `update_video(canvas_id: str, video_id: str, payload: JsonData) -> Video`
 
+> **Canvus 3.5 breaking change:** Changing `size` on Video widgets now enforces the current aspect ratio. The requested size is treated as a bounding box using longest-edge scaling. Read the response body to get the actual applied size.
+
 Supports all standard widget fields plus:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `playback_state` | `str` | `"STOPPED"` or `"PLAYING"` |
+| `playback_state` | `str` | `"STOPPED"`, `"PLAYING"`, or `"PAUSED"` |
 | `playback_position` | `float` | Position in seconds |
+| `muted` | `bool` | Whether audio is muted *(New in Canvus 3.5)* |
+
+**Read-only attributes** *(New in Canvus 3.5)*:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `duration` | `float` | Video duration in seconds (populated by desktop client decoder, 0.0 if not yet decoded) |
 
 ```python
 await client.update_video(canvas_id, video.id, {"playback_state": "PLAYING"})
+
+# Mute the video (New in Canvus 3.5)
+await client.update_video(canvas_id, video.id, {"muted": True})
 ```
+
+> **Canvus 3.5 behavior change:** When `playback_state` is set to `"PAUSED"` without providing `playback_position`, the server now computes the correct current position. Previously, pausing without an explicit position caused the video to jump back.
 
 ### `delete_video(canvas_id: str, video_id: str) -> None`
 
@@ -604,6 +678,182 @@ connector = await client.create_connector(canvas_id, {
 Circular parenting check is applied. Note that connectors do not have a `location` attribute, so position offsetting does not apply on reparent.
 
 ### `delete_connector(canvas_id: str, connector_id: str) -> None`
+
+---
+
+## Tables
+
+> **New in Canvus 3.5.** Table widgets were added as part of the Canvus 3.5 API refactor.
+
+Tables are grid-based container widgets on the canvas. Each table is a structured grid of cells where you can organize content into rows and columns. When you create a table, the server automatically creates the cell widgets to fill the grid.
+
+### `list_tables(canvas_id: str) -> List[Table]`
+
+Returns all tables on a canvas.
+
+### `get_table(canvas_id: str, table_id: str) -> Table`
+
+Returns a single table by ID.
+
+### `create_table(canvas_id: str, payload: Dict[str, Any]) -> Table`
+
+Creates a new table widget. The server automatically creates the grid cells based on `grid_size`.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `location` | `{"x": float, "y": float}` | yes | — | Canvas position |
+| `size` | `{"width": float, "height": float}` | no | server default | Table dimensions |
+| `grid_size` | `{"rows": int, "columns": int}` | no | `{"rows": 2, "columns": 2}` | Grid dimensions |
+| `title` | `str` | no | `None` | Display title |
+| `depth` | `float` | no | `1.0` | Z-order depth (must be >= 1.0) |
+| `pinned` | `bool` | no | `False` | Whether the table is pinned |
+
+```python
+table = await client.create_table(canvas_id, {
+    "location": {"x": 100, "y": 100},
+    "size": {"width": 600, "height": 400},
+    "grid_size": {"rows": 3, "columns": 4},
+    "title": "Comparison Matrix",
+})
+```
+
+### `update_table(canvas_id: str, table_id: str, payload: Dict[str, Any]) -> Table`
+
+Updates table properties. The `grid_size` cannot be changed after creation.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `title` | `str` | Display title |
+| `location` | `{"x": float, "y": float}` | Canvas position |
+| `size` | `{"width": float, "height": float}` | Table dimensions |
+| `pinned` | `bool` | Whether the table is pinned |
+| `auto_raise` | `bool` | When `true`, sets depth above all siblings |
+
+### `delete_table(canvas_id: str, table_id: str) -> None`
+
+Permanently removes a table and all its cells. Any connectors attached to the table are also deleted.
+
+### `list_table_cells(canvas_id: str, table_id: str) -> List[TableCell]`
+
+Returns all cells belonging to a specific table. Each cell includes `row` and `column` position.
+
+```python
+cells = await client.list_table_cells(canvas_id, table_id)
+for cell in cells:
+    print(f"Cell at row {cell.row}, column {cell.column}")
+```
+
+### `list_all_table_cells(canvas_id: str) -> List[TableCell]`
+
+Returns all table cells across all tables on a canvas in a single flat list.
+
+---
+
+## IP Videos
+
+> **New in Canvus 3.5.** IP Video widgets were added as part of the Canvus 3.5 API refactor.
+
+IP Video widgets embed live network video streams on the canvas. They display content from IP cameras, RTSP/RTMP streams, or any other network video source. The Canvus desktop client handles decoding and rendering — the server stores the widget's metadata and stream configuration.
+
+### `list_ip_videos(canvas_id: str) -> List[IpVideo]`
+
+Returns all IP Video widgets on a canvas.
+
+### `get_ip_video(canvas_id: str, widget_id: str) -> IpVideo`
+
+Returns a single IP Video widget by ID.
+
+### `create_ip_video(canvas_id: str, payload: Dict[str, Any]) -> IpVideo`
+
+Creates a new IP Video widget.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `source` | `str` | yes | — | Stream URL (RTSP, RTMP, etc.) |
+| `location` | `{"x": float, "y": float}` | yes | — | Canvas position |
+| `size` | `{"width": float, "height": float}` | yes | — | Widget dimensions |
+| `title` | `str` | no | `None` | Display title |
+| `depth` | `float` | no | `1.0` | Z-order depth (must be >= 1.0) |
+| `pinned` | `bool` | no | `False` | Whether the widget is pinned |
+
+```python
+ip_video = await client.create_ip_video(canvas_id, {
+    "source": "rtsp://192.168.1.100:554/stream1",
+    "location": {"x": 200, "y": 200},
+    "size": {"width": 640, "height": 480},
+    "title": "Lobby Camera",
+})
+```
+
+### `update_ip_video(canvas_id: str, widget_id: str, payload: Dict[str, Any]) -> IpVideo`
+
+Updates IP Video properties.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `source` | `str` | New stream URL |
+| `title` | `str` | Display title |
+| `auto_raise` | `bool` | When `true`, sets depth above all siblings |
+
+### `delete_ip_video(canvas_id: str, widget_id: str) -> None`
+
+Permanently removes an IP Video widget. Any connectors attached to this widget are also deleted.
+
+> **Note:** The `source` URL must be reachable from the Canvus desktop client, not the server. The `host_id` field (read-only) identifies which connected client is responsible for decoding the stream.
+
+---
+
+## RDP Connections
+
+> **New in Canvus 3.5.** RDP Connection widgets were added as part of the Canvus 3.5 API refactor.
+
+RDP Connection widgets embed live Remote Desktop Protocol sessions on the canvas. They allow Canvus users to interact with remote Windows (or other RDP-capable) machines directly from the collaborative canvas surface.
+
+### `list_rdp_connections(canvas_id: str) -> List[RdpConnection]`
+
+Returns all RDP Connection widgets on a canvas.
+
+### `get_rdp_connection(canvas_id: str, widget_id: str) -> RdpConnection`
+
+Returns a single RDP Connection widget by ID.
+
+### `create_rdp_connection(canvas_id: str, payload: Dict[str, Any]) -> RdpConnection`
+
+Creates a new RDP Connection widget.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `connection_name` | `str` | yes | — | Hostname or IP address of remote machine |
+| `location` | `{"x": float, "y": float}` | yes | — | Canvas position |
+| `size` | `{"width": float, "height": float}` | yes | — | Widget dimensions |
+| `title` | `str` | no | `None` | Display title |
+| `depth` | `float` | no | `1.0` | Z-order depth (must be >= 1.0) |
+| `pinned` | `bool` | no | `False` | Whether the widget is pinned |
+
+```python
+rdp = await client.create_rdp_connection(canvas_id, {
+    "connection_name": "workstation.local",
+    "location": {"x": 300, "y": 300},
+    "size": {"width": 1280, "height": 720},
+    "title": "Engineering Workstation",
+})
+```
+
+### `update_rdp_connection(canvas_id: str, widget_id: str, payload: Dict[str, Any]) -> RdpConnection`
+
+Updates RDP Connection properties.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `connection_name` | `str` | Hostname or IP address |
+| `title` | `str` | Display title |
+| `auto_raise` | `bool` | When `true`, sets depth above all siblings |
+
+### `delete_rdp_connection(canvas_id: str, widget_id: str) -> None`
+
+Permanently removes an RDP Connection widget. The remote desktop session (if active) is terminated.
+
+> **Note:** RDP authentication is handled by the Canvus desktop client at connection time. The API does not store or transmit RDP credentials. The `host_id` and `content_id` fields are read-only and managed by the system.
 
 ---
 
